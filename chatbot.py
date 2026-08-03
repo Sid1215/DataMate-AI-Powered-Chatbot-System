@@ -1,11 +1,11 @@
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from dotenv import load_dotenv
 from dbop import get_database_schema, execute_sql_query
 
 load_dotenv()
 
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
+llm = ChatGroq(
+    model="qwen/qwen3-32b",
     temperature=0
 )
 
@@ -14,8 +14,6 @@ def get_ai_response(user_input, db_path):
     schema = get_database_schema(db_path)
 
     # -------------------- Prompt 1 : Generate SQL -------------------- #
-
-
 
     sql_prompt = f"""
 You are an expert SQLite assistant for a supermarket database.
@@ -43,9 +41,9 @@ User Question:
 
     try:
         query_result = execute_sql_query(
-        sql_query,
-        db_path
-    )
+            sql_query,
+            db_path
+        )
     except Exception as e:
         return f"Error:\n\n{e}"
 
