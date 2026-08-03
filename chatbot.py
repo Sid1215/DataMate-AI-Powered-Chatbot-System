@@ -1,15 +1,13 @@
-from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
 from dbop import get_database_schema, execute_sql_query
 
 load_dotenv()
 
-llm = ChatGroq(
-    model="qwen/qwen3.6-27b",
-    temperature=0,
-    reasoning_effort="none"
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash",
+    temperature=0
 )
-
 
 def get_ai_response(user_input, db_path):
     # Get database schema
