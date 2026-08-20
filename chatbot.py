@@ -1,9 +1,21 @@
-from langchain_groq import ChatGroq
 from dotenv import load_dotenv
+
+from langchain_groq import ChatGroq
+
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import (
+    RunnableLambda,
+    RunnablePassthrough
+)
+
 from dbop import get_database_schema, execute_sql_query
 
+# LOAD ENVIRONMENT VARIABLES
 load_dotenv()
 
+
+# LLM
 llm = ChatGroq(
     model="qwen/qwen3.6-27b",
     temperature=0,
@@ -11,15 +23,12 @@ llm = ChatGroq(
 )
 
 
-def get_ai_response(user_input, db_path):
-    # Get database schema
-    schema = get_database_schema(db_path)
-
-    # -------------------- Prompt 1 : Generate SQL -------------------- #
+# OUTPUT PARSER
+output_parser = StrOutputParser()
 
 
-
-    sql_prompt = f"""
+# PROMPT 1: SQL GENERATION
+sql_prompt = PromptTemplate.from_template("""
 You are an expert SQLite assistant for a supermarket database.
 
 Database Schema:
@@ -33,27 +42,25 @@ Instructions:
 5. Handle spelling mistakes and similar product names whenever possible.
 6. Use aggregate functions (SUM, COUNT, AVG, MAX, MIN) whenever required.
 7. Return ONLY the SQL query.
-8. Do not include explanations, markdown, or code fences.
+8. Do not include explanations.
+9. Do not include markdown.
+10. Do not use code fences.
 
 User Question:
 {user_input}
-"""
+""")
 
-    sql_query = llm.invoke(sql_prompt).content.strip()
 
-    # -------------------- Execute SQL -------------------- #
+# SQL GENERATION CHAIN
+sql_chain = (
+    sql_prompt
+    | llm
+    | output_parser
+)
 
-    try:
-        query_result = execute_sql_query(
-        sql_query,
-        db_path
-    )
-    except Exception as e:
-        return f"Error:\n\n{e}"
 
-    # -------------------- Prompt 2 : Generate Answer -------------------- #
-
-    answer_prompt = f"""
+# PROMPT 2: FINAL ANSWER
+answer_prompt = PromptTemplate.from_template("""
 You are an intelligent supermarket AI assistant.
 
 User Question:
@@ -62,16 +69,115 @@ User Question:
 Database Result:
 {query_result}
 
-Instructions:
-1. Answer ONLY using the database result.
-2. Never make assumptions.
-3. If the database result is empty, reply exactly:
-   "The requested information is not available in the database."
-4. Keep the response short and natural.
-5. Do not mention SQL, queries, or the database.
-6. Return only the final answer.
-"""
+SQL Execution Error:
+{error}
 
-    final_answer = llm.invoke(answer_prompt).content.strip()
+Instructions:
+1. If SQL Execution Error is not empty, reply:
+   "Sorry, I couldn't process your request."
+2. Otherwise answer ONLY using the database result.
+3. Never make assumptions.
+4. If the database result is empty, reply exactly:
+   "The requested information is not available in the database."
+5. Keep the response short and natural.
+6. Do not mention SQL.
+7. Do not mention queries.
+8. Do not mention the database.
+9. Return only the final answer.
+""")
+
+
+# FINAL ANSWER CHAIN
+answer_chain = (
+    answer_prompt
+    | llm
+    | output_parser
+)
+
+
+# PREPARE INPUT FOR SQL CHAIN
+prepare_sql_input = RunnableLambda(
+    lambda x: {
+        "schema": x["schema"],
+        "user_input": x["user_input"]
+    }
+)
+
+
+# EXECUTE SQL
+def execute_query(data):
+
+    sql_query = data["sql_query"]
+    db_path = data["db_path"]
+    user_input = data["user_input"]
+
+    try:
+
+        # Execute generated SQL
+        result = execute_sql_query(
+            sql_query,
+            db_path
+        )
+
+        return {
+            "user_input": user_input,
+            "query_result": result,
+            "error": ""
+        }
+
+    except Exception as e:
+
+        return {
+            "user_input": user_input,
+            "query_result": "",
+            "error": str(e)
+        }
+
+
+# Convert normal Python function into LangChain Runnable
+execute_query_runnable = RunnableLambda(execute_query)
+
+
+# COMPLETE CHAIN
+final_chain = (
+    
+    {
+        # Generate SQL
+        "sql_query": (
+            prepare_sql_input
+            | sql_chain
+        ),
+
+        # Pass original user question
+        "user_input": RunnableLambda(
+            lambda x: x["user_input"]
+        ),
+
+        # Pass database path
+        "db_path": RunnableLambda(
+            lambda x: x["db_path"]
+        )
+    }
+
+    # Execute SQL
+    | execute_query_runnable
+
+    # Generate final natural-language answer
+    | answer_chain
+)
+
+
+# MAIN FUNCTION
+def get_ai_response(user_input, db_path):
+
+    # Get database schema
+    schema = get_database_schema(db_path)
+
+    # Run complete LangChain pipeline
+    final_answer = final_chain.invoke({
+        "schema": schema,
+        "user_input": user_input,
+        "db_path": db_path
+    })
 
     return final_answer
